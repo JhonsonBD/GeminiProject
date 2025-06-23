@@ -1,3 +1,4 @@
+from fastapi import Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from dotenv import load_dotenv
 import requests
