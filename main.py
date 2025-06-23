@@ -250,9 +250,10 @@ async def zoom_callback(request: Request):
         return JSONResponse({"error": "Missing code"}, status_code=400)
 
     token_url = "https://zoom.us/oauth/token"
+    basic_auth = requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)
     headers = {
-        "Authorization": f"Basic {requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)}",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Authorization": basic_auth,
+        "Content-Type": "application/x-www-form-urlencoded",
     }
     data = {
         "grant_type": "authorization_code",
@@ -264,7 +265,8 @@ async def zoom_callback(request: Request):
     if response.status_code != 200:
         return JSONResponse({"error": "Failed to retrieve token", "details": response.text}, status_code=500)
 
-    tokens = response.json()
+    return JSONResponse({"message": "Success", "tokens": response.json()})
+
     return JSONResponse({"message": "Success", "tokens": tokens})
 
 
