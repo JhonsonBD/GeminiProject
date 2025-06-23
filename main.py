@@ -4,11 +4,11 @@ from pydantic import BaseModel
 import google.generativeai as genai
 
 # קונפיגורציה
-genai.configure(api_key="AIzaSyDB7hY-Otzl8l6q5x4aF8AOOwjNDYAlC7Q")
-
-model = genai.GenerativeModel("gemini-pro")
+genai.configure(api_key=os.environ.get("AIzaSyDB7hY-Otzl8l6q5x4aF8AOOwjNDYAlC7Q"))
 
 app = FastAPI()
+
+model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest")
 
 class Query(BaseModel):
     prompt: str
@@ -20,3 +20,4 @@ async def chat_endpoint(query: Query):
         return {"reply": response.text.strip()}
     except Exception as e:
         return {"error": str(e)}
+
