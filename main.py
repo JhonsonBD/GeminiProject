@@ -1,171 +1,228 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+import asyncio
+import io
 import os
-from typing import List, Optional
+from typing import Dict, Optional
 import uuid
-from datetime import datetime
+import wave
+import json
+from google import genai
+from google.genai import types
+import soundfile as sf
+import librosa
+import base64
 
 # Configure Gemini
 api_key = os.environ.get("GOOGLE_API_KEY")
 if not api_key:
     raise ValueError("GOOGLE_API_KEY environment variable is required")
 
-genai.configure(api_key=api_key)
+client = genai.Client(api_key=api_key)
 
-app = FastAPI(title="Real-time Gemini Chat API")
+app = FastAPI(title="Gemini Live Real-time API")
 
-# Add CORS middleware for Bubble.io
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Bubble app domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize model with conversation-optimized settings
-model = genai.GenerativeModel(
-    model_name="models/gemini-1.5-pro-latest",
-    generation_config=genai.types.GenerationConfig(
-        temperature=0.7,
-        top_p=0.8,
-        top_k=40,
-        max_output_tokens=1000,
-    )
-)
+# Store active sessions
+active_sessions: Dict[str, dict] = {}
 
-# In-memory conversation storage (use Redis/DB for production)
-conversations = {}
+# Gemini Live configuration
+GEMINI_LIVE_MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+LIVE_CONFIG = {
+    "response_modalities": ["AUDIO"],
+    "system_instruction": "You are a helpful AI assistant. Respond naturally and conversationally. Keep responses concise but friendly.",
+}
 
-class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
-    timestamp: datetime
-
-class ConversationStart(BaseModel):
+class LiveSessionStart(BaseModel):
     user_id: str
-    system_prompt: Optional[str] = "אתה עוזר בינה מלאכותית שמתמחה בכל מני נושאים"
+    system_instruction: Optional[str] = None
 
-class ChatQuery(BaseModel):
-    conversation_id: str
-    user_message: str
-    user_id: str
-
-class ConversationResponse(BaseModel):
-    conversation_id: str
-    ai_response: str
-    conversation_history: List[dict]
-    status: str
+class AudioMessage(BaseModel):
+    session_id: str
+    audio_data: str  # Base64 encoded audio
+    mime_type: str = "audio/wav"
 
 @app.get("/")
 async def health_check():
-    return {"status": "healthy", "service": "Real-time Gemini Chat API"}
+    return {"status": "healthy", "service": "Gemini Live Real-time API"}
 
-@app.post("/conversation/start")
-async def start_conversation(request: ConversationStart):
-    """Start a new conversation session"""
+@app.post("/live/start")
+async def start_live_session(request: LiveSessionStart):
+    """Start a new Gemini Live session"""
     try:
-        conversation_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
         
-        conversations[conversation_id] = {
+        # Custom system instruction if provided
+        config = LIVE_CONFIG.copy()
+        if request.system_instruction:
+            config["system_instruction"] = request.system_instruction
+        
+        active_sessions[session_id] = {
             "user_id": request.user_id,
-            "messages": [],
-            "system_prompt": request.system_prompt,
-            "created_at": datetime.now()
+            "config": config,
+            "status": "ready"
         }
         
         return {
-            "conversation_id": conversation_id,
-            "status": "conversation_started",
-            "message": "Ready for real-time chat!"
+            "session_id": session_id,
+            "status": "ready",
+            "message": "Gemini Live session started - ready for audio!"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat/realtime", response_model=ConversationResponse)
-async def realtime_chat(query: ChatQuery):
-    """Handle real-time chat messages"""
+@app.post("/live/audio")
+async def process_audio(request: AudioMessage):
+    """Process audio through Gemini Live and return audio response"""
     try:
-        if query.conversation_id not in conversations:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        if request.session_id not in active_sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
         
-        conversation = conversations[query.conversation_id]
+        session_info = active_sessions[request.session_id]
         
-        # Add user message to conversation
-        user_message = {
-            "role": "user",
-            "content": query.user_message,
-            "timestamp": datetime.now().isoformat()
-        }
-        conversation["messages"].append(user_message)
+        # Decode base64 audio
+        try:
+            audio_bytes = base64.b64decode(request.audio_data)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 audio data")
         
-        # Build conversation context
-        context = conversation["system_prompt"] + "\n\n"
-        for msg in conversation["messages"][-10:]:  # Keep last 10 messages for context
-            context += f"{msg['role']}: {msg['content']}\n"
+        # Convert audio to required format (16kHz PCM)
+        audio_buffer = io.BytesIO(audio_bytes)
+        try:
+            # Load audio and convert to 16kHz
+            y, sr = librosa.load(audio_buffer, sr=16000)
+            
+            # Convert to PCM format
+            pcm_buffer = io.BytesIO()
+            sf.write(pcm_buffer, y, 16000, format='RAW', subtype='PCM_16')
+            pcm_buffer.seek(0)
+            pcm_audio = pcm_buffer.read()
+            
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Audio processing error: {str(e)}")
         
-        # Generate AI response
-        response = model.generate_content(context + "assistant:")
+        # Process with Gemini Live
+        response_audio = await process_with_gemini_live(pcm_audio, session_info["config"])
         
-        if not response.text:
-            ai_response = "לא הבנתי כל כך את מה שאמרת, תוכל לחזור על זה?"
-        else:
-            ai_response = response.text.strip()
-        
-        # Add AI response to conversation
-        ai_message = {
-            "role": "assistant", 
-            "content": ai_response,
-            "timestamp": datetime.now().isoformat()
-        }
-        conversation["messages"].append(ai_message)
-        
-        return ConversationResponse(
-            conversation_id=query.conversation_id,
-            ai_response=ai_response,
-            conversation_history=conversation["messages"][-5:],  # Return last 5 messages
-            status="success"
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/conversation/{conversation_id}/history")
-async def get_conversation_history(conversation_id: str):
-    """Get full conversation history"""
-    if conversation_id not in conversations:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    return {
-        "conversation_id": conversation_id,
-        "messages": conversations[conversation_id]["messages"],
-        "total_messages": len(conversations[conversation_id]["messages"])
-    }
-
-@app.delete("/conversation/{conversation_id}")
-async def end_conversation(conversation_id: str):
-    """End and cleanup conversation"""
-    if conversation_id not in conversations:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    del conversations[conversation_id]
-    return {"status": "conversation_ended", "conversation_id": conversation_id}
-
-@app.post("/chat/quick")
-async def quick_chat(query: dict):
-    """Quick chat without conversation context (for simple use cases)"""
-    try:
-        user_prompt = query.get("prompt", "")
-        if not user_prompt:
-            raise HTTPException(status_code=400, detail="Prompt is required")
-        
-        response = model.generate_content(user_prompt)
+        # Convert response audio to base64
+        response_audio_b64 = base64.b64encode(response_audio).decode('utf-8')
         
         return {
-            "reply": response.text.strip() if response.text else "No response generated",
+            "session_id": request.session_id,
+            "response_audio": response_audio_b64,
+            "mime_type": "audio/wav",
             "status": "success"
         }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"error": str(e), "status": "error"}
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def process_with_gemini_live(audio_data: bytes, config: dict) -> bytes:
+    """Process audio through Gemini Live API"""
+    try:
+        async with client.aio.live.connect(model=GEMINI_LIVE_MODEL, config=config) as session:
+            
+            # Send audio input
+            await session.send_realtime_input(
+                audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+            )
+            
+            # Collect response audio
+            response_audio = io.BytesIO()
+            
+            # Set up wave file for proper audio format
+            wf = wave.open(response_audio, "wb")
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)  # Gemini outputs 24kHz
+            
+            async for response in session.receive():
+                if response.data is not None:
+                    wf.writeframes(response.data)
+            
+            wf.close()
+            response_audio.seek(0)
+            
+            return response_audio.read()
+            
+    except Exception as e:
+        raise Exception(f"Gemini Live processing error: {str(e)}")
+
+@app.delete("/live/{session_id}")
+async def end_live_session(session_id: str):
+    """End a live session"""
+    if session_id not in active_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    del active_sessions[session_id]
+    return {"status": "session_ended", "session_id": session_id}
+
+@app.get("/live/{session_id}/status")
+async def get_session_status(session_id: str):
+    """Get session status"""
+    if session_id not in active_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {
+        "session_id": session_id,
+        "status": active_sessions[session_id]["status"],
+        "user_id": active_sessions[session_id]["user_id"]
+    }
+
+# WebSocket endpoint for real-time streaming (optional advanced feature)
+@app.websocket("/live/stream/{session_id}")
+async def websocket_live_stream(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time audio streaming"""
+    await websocket.accept()
+    
+    if session_id not in active_sessions:
+        await websocket.close(code=1008, reason="Session not found")
+        return
+    
+    try:
+        while True:
+            # Receive audio data from client
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message.get("type") == "audio":
+                # Process audio through Gemini Live
+                audio_data = base64.b64decode(message["audio"])
+                
+                # Convert to PCM format
+                audio_buffer = io.BytesIO(audio_data)
+                y, sr = librosa.load(audio_buffer, sr=16000)
+                pcm_buffer = io.BytesIO()
+                sf.write(pcm_buffer, y, 16000, format='RAW', subtype='PCM_16')
+                pcm_buffer.seek(0)
+                pcm_audio = pcm_buffer.read()
+                
+                # Get response from Gemini Live
+                response_audio = await process_with_gemini_live(
+                    pcm_audio, 
+                    active_sessions[session_id]["config"]
+                )
+                
+                # Send response back
+                await websocket.send_text(json.dumps({
+                    "type": "audio_response",
+                    "audio": base64.b64encode(response_audio).decode('utf-8'),
+                    "session_id": session_id
+                }))
+                
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await websocket.close(code=1011, reason="Internal error")
