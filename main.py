@@ -231,42 +231,42 @@ async def websocket_live_stream(websocket: WebSocket, session_id: str):
         print(f"WebSocket error: {e}")
         await websocket.close(code=1011, reason="Internal error")
 
-load_dotenv()
 
-ZOOM_CLIENT_ID = os.getenv("ZOOM_CLIENT_ID")
-ZOOM_CLIENT_SECRET = os.getenv("ZOOM_CLIENT_SECRET")
-ZOOM_REDIRECT_URI = os.getenv("ZOOM_REDIRECT_URI")
+@app.get("/zoom/oauth")
+async def zoom_oauth(code: str = Query(None)):
+    ZOOM_CLIENT_ID = os.getenv("ZOOM_CLIENT_ID")
+    ZOOM_CLIENT_SECRET = os.getenv("ZOOM_CLIENT_SECRET")
+    ZOOM_REDIRECT_URI = os.getenv("ZOOM_REDIRECT_URI")
 
-@app.get("/zoom/auth")
-async def zoom_auth():
-    return RedirectResponse(
-        f"https://zoom.us/oauth/authorize?response_type=code&client_id={ZOOM_CLIENT_ID}&redirect_uri={ZOOM_REDIRECT_URI}"
-    )
+    if not (ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET and ZOOM_REDIRECT_URI):
+        return {"error": "Zoom environment variables not set"}
 
-@app.get("/zoom/callback")
-async def zoom_callback(request: Request):
-    code = request.query_params.get("code")
-    if not code:
-        return JSONResponse({"error": "Missing code"}, status_code=400)
+    if code is None:
+        # No code param, return authorization URL for frontend to redirect user
+        auth_url = (
+            f"https://zoom.us/oauth/authorize"
+            f"?response_type=code"
+            f"&client_id={ZOOM_CLIENT_ID}"
+            f"&redirect_uri={ZOOM_REDIRECT_URI}"
+        )
+        return {"authorization_url": auth_url}
 
+    # If code param is present, exchange code for access token
     token_url = "https://zoom.us/oauth/token"
-    basic_auth = requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)
     headers = {
-        "Authorization": basic_auth,
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)}",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
     data = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": ZOOM_REDIRECT_URI,
     }
-
     response = requests.post(token_url, headers=headers, data=data)
+
     if response.status_code != 200:
-        return JSONResponse({"error": "Failed to retrieve token", "details": response.text}, status_code=500)
+        return {"error": "Failed to retrieve token", "details": response.text}
 
-    return JSONResponse({"message": "Success", "tokens": response.json()})
-
-    return JSONResponse({"message": "Success", "tokens": tokens})
-
+    tokens = response.json()
+    return {"message": "Success", "tokens": tokens}
 
