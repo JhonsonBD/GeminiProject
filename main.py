@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import google.generativeai as genai
+import os
 
 # קונפיגורציה
 genai.configure(api_key=os.environ.get("AIzaSyDB7hY-Otzl8l6q5x4aF8AOOwjNDYAlC7Q"))
