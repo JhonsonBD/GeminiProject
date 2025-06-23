@@ -1,5 +1,6 @@
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi import Request
+from fastapi import Query
 from dotenv import load_dotenv
 import requests
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
