@@ -251,18 +251,20 @@ async def zoom_callback(request: Request):
 
     token_url = "https://zoom.us/oauth/token"
     headers = {
-        "Authorization": f"Basic {requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)}"
+        "Authorization": f"Basic {requests.auth._basic_auth_str(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)}",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
-    params = {
+    data = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": ZOOM_REDIRECT_URI,
     }
 
-    response = requests.post(token_url, headers=headers, params=params)
+    response = requests.post(token_url, headers=headers, data=data)
     if response.status_code != 200:
         return JSONResponse({"error": "Failed to retrieve token", "details": response.text}, status_code=500)
 
     tokens = response.json()
     return JSONResponse({"message": "Success", "tokens": tokens})
+
 
