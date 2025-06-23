@@ -5,3 +5,4 @@ pydantic
 librosa
 soundfile
 websockets
+python-dotenv
