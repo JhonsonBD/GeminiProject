@@ -46,7 +46,7 @@ class ChatMessage(BaseModel):
 
 class ConversationStart(BaseModel):
     user_id: str
-    system_prompt: Optional[str] = "You are a helpful AI assistant having a natural conversation."
+    system_prompt: Optional[str] = "אתה עוזר בינה מלאכותית שמתמחה בכל מני נושאים"
 
 class ChatQuery(BaseModel):
     conversation_id: str
@@ -110,7 +110,7 @@ async def realtime_chat(query: ChatQuery):
         response = model.generate_content(context + "assistant:")
         
         if not response.text:
-            ai_response = "I'm sorry, I couldn't generate a response. Could you try again?"
+            ai_response = "לא הבנתי כל כך את מה שאמרת, תוכל לחזור על זה?"
         else:
             ai_response = response.text.strip()
         
