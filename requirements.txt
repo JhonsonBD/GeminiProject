@@ -1,4 +1,7 @@
 fastapi
 uvicorn
-google-generativeai
+google-genai
 pydantic
+librosa
+soundfile
+websockets
