@@ -7,3 +7,4 @@ soundfile
 websockets
 python-dotenv
 numpy
+pydub
