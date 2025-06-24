@@ -6,3 +6,4 @@ librosa
 soundfile
 websockets
 python-dotenv
+numpy
